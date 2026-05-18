@@ -1,0 +1,17 @@
+{
+  "name": "TimeTrack",
+  "short_name": "TimeTrack",
+  "description": "Employee clock-in / clock-out time tracker",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#111111",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
