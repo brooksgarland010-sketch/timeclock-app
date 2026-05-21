@@ -197,10 +197,6 @@ export default function App() {
     doc.text('Week Ending:', M + 2, 38)
     doc.setFont(undefined, 'bold')
     doc.text(weekEndStr, M + 28, 38)
-    doc.setFont(undefined, 'normal')
-    doc.text('OFF DAYS:', PW / 2, 35)
-    doc.text('LEAVING EARLY:', PW / 2, 43)
-
     // ── Table setup ──
     const TT  = 54   // table top y
     const RH  = 12   // row height
