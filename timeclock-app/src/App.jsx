@@ -42,12 +42,16 @@ const initials = n => n.split(' ').map(w => w[0]).join('').toUpperCase().slice(0
 const getToday = () => new Date().toISOString().split('T')[0]
 
 const getWeekDates = () => {
-  const now = new Date(), day = now.getDay(), diff = day === 0 ? -6 : 1 - day
-  const mon = new Date(now)
-  mon.setDate(now.getDate() + diff)
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(mon)
-    d.setDate(mon.getDate() + i)
+  // Pay week: Friday → Monday → Tuesday → Wednesday → Thursday
+  const now = new Date()
+  const day = now.getDay() // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
+  const daysBackToFriday = (day + 2) % 7
+  const friday = new Date(now)
+  friday.setDate(now.getDate() - daysBackToFriday)
+  // Fri=+0, Mon=+3, Tue=+4, Wed=+5, Thu=+6
+  return [0, 3, 4, 5, 6].map(offset => {
+    const d = new Date(friday)
+    d.setDate(friday.getDate() + offset)
     return d.toISOString().split('T')[0]
   })
 }
@@ -148,46 +152,170 @@ export default function App() {
     await saveEmployees(employees.filter(e => e.id !== id))
   }
 
-  /* ─── PDF ─── */
+  /* ─── PDF — matches physical time sheet ─── */
   const generatePDF = emp => {
-    const wd = getWeekDates()
+    const wd   = getWeekDates() // [Fri, Mon, Tue, Wed, Thu]
     const recs = records.filter(r => r.empId === emp.id && wd.includes(r.date))
-    const doc = new jsPDF()
-    doc.setFillColor(17,17,17); doc.rect(0,0,210,36,'F')
-    doc.setTextColor(255,255,255); doc.setFontSize(20); doc.setFont(undefined,'bold'); doc.text('TimeTrack',15,15)
-    doc.setFontSize(11); doc.setFont(undefined,'normal'); doc.text('Weekly Time Report',15,24)
-    doc.text(`Week of ${fmtDate(wd[0])} – ${fmtDate(wd[4])}`,15,31)
-    doc.setTextColor(17,17,17); doc.setFontSize(18); doc.setFont(undefined,'bold'); doc.text(emp.name,15,52)
-    doc.setFontSize(10); doc.setFont(undefined,'normal'); doc.setTextColor(100,100,100)
-    doc.text(`Generated ${new Date().toLocaleDateString([],{weekday:'long',year:'numeric',month:'long',day:'numeric'})}`,15,59)
-    doc.setFillColor(245,245,245); doc.rect(15,66,180,9,'F')
-    doc.setTextColor(80,80,80); doc.setFontSize(9); doc.setFont(undefined,'bold')
-    const cols=[15,55,90,128,158,178]
-    ;['Date','Clock In','Lunch','Clock Out','Lunch Dur.','Worked'].forEach((h,i)=>doc.text(h,cols[i],72))
-    doc.setFont(undefined,'normal')
-    let y=86, totalMs=0
-    wd.slice(0,5).forEach((date,idx)=>{
-      const r=recs.find(x=>x.date===date); const worked=calcWorked(r); const lunch=calcLunch(r); totalMs+=worked
-      if(idx%2===0){doc.setFillColor(251,251,250);doc.rect(15,y-6,180,10,'F')}
-      doc.setTextColor(17,17,17); doc.setFontSize(9)
-      doc.text(fmtDate(date),cols[0],y)
-      doc.text(r?.clockIn?fmt(r.clockIn):'—',cols[1],y)
-      doc.text(r?.lunchStart?`${fmt(r.lunchStart)} – ${r.lunchEnd?fmt(r.lunchEnd):'open'}`:'—',cols[2],y)
-      doc.text(r?.clockOut?fmt(r.clockOut):'—',cols[3],y)
-      doc.text(lunch>0?msToHM(lunch):'—',cols[4],y)
-      doc.text(worked>0?msToHM(worked):'—',cols[5],y)
-      y+=12
+    const doc  = new jsPDF({ unit: 'mm', format: 'letter' })
+
+    const PW = 215.9, PH = 279.4
+    const M  = 14   // margin
+
+    // ── Cream background ──
+    doc.setFillColor(245, 238, 220)
+    doc.rect(0, 0, PW, PH, 'F')
+
+    // ── Double border ──
+    doc.setDrawColor(120, 75, 55)
+    doc.setLineWidth(1.2)
+    doc.rect(7, 7, PW - 14, PH - 14)
+    doc.setLineWidth(0.4)
+    doc.rect(10, 10, PW - 20, PH - 20)
+
+    // ── Header: Name + TIME SHEET ──
+    doc.setTextColor(80, 35, 20)
+    doc.setFontSize(12); doc.setFont(undefined, 'normal')
+    doc.text('Name:', M + 2, 26)
+    doc.setFont(undefined, 'bold'); doc.setFontSize(11)
+    doc.text(emp.name, M + 18, 26)
+    // Underline name
+    const nameW = doc.getTextWidth(emp.name)
+    doc.setLineWidth(0.4)
+    doc.line(M + 18, 27.5, M + 18 + nameW, 27.5)
+
+    // TIME SHEET title
+    doc.setFontSize(22); doc.setFont(undefined, 'bold')
+    doc.text('TIME SHEET', PW - M - 2, 26, { align: 'right' })
+    const tsW = doc.getTextWidth('TIME SHEET')
+    doc.setLineWidth(0.6)
+    doc.line(PW - M - 2 - tsW, 27.8, PW - M - 2, 27.8)
+
+    // ── Week Ending / Off Days / Leaving Early ──
+    const weekEndDate = new Date(wd[4] + 'T12:00:00')
+    const weekEndStr  = weekEndDate.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })
+    doc.setFontSize(10); doc.setFont(undefined, 'normal')
+    doc.text('Week Ending:', M + 2, 38)
+    doc.setFont(undefined, 'bold')
+    doc.text(weekEndStr, M + 28, 38)
+    doc.setFont(undefined, 'normal')
+    doc.text('OFF DAYS:', PW / 2, 35)
+    doc.text('LEAVING EARLY:', PW / 2, 43)
+
+    // ── Table setup ──
+    const TT  = 54   // table top y
+    const RH  = 12   // row height
+    const TL  = M + 2               // table left x
+    const TR  = PW - M - 2          // table right x
+    const TW  = TR - TL             // table width = ~187.9mm
+
+    // Column x positions (left edge of each column)
+    const C = {
+      day:   TL,
+      date:  TL + 38,
+      start: TL + 65,
+      end:   TL + 100,
+      lunch: TL + 135,
+      total: TL + 162,
+    }
+
+    // ── Column headers ──
+    doc.setFont(undefined, 'bold'); doc.setFontSize(8.5)
+    doc.setTextColor(80, 35, 20)
+    doc.text('DATE',       C.day   + 1, TT - 9)
+    doc.text('DATE',       C.date  + 1, TT - 9)
+    doc.text('START TIME', C.start + 1, TT - 9)
+    doc.text('END TIME',   C.end   + 1, TT - 9)
+    doc.text('LUNCH',      C.lunch + 1, TT - 13)
+    doc.text('BREAK',      C.lunch + 1, TT - 7)
+    doc.text('TOTAL HOURS',C.total + 1, TT - 9)
+
+    // ── Draw table grid ──
+    doc.setDrawColor(120, 75, 55)
+    doc.setLineWidth(0.45)
+
+    // Horizontal lines: top of header, top of data, after each row, bottom
+    const rows = 5 // Fri Mon Tue Wed Thu
+    doc.line(TL, TT - 15, TR, TT - 15) // top of header
+    doc.line(TL, TT,      TR, TT)       // below header / top of data
+    for (let i = 1; i <= rows + 1; i++) {
+      doc.line(TL, TT + i * RH, TR, TT + i * RH)
+    }
+
+    // Vertical lines
+    ;[C.day, C.date, C.start, C.end, C.lunch, C.total, TR].forEach(x => {
+      doc.line(x, TT - 15, x, TT + (rows + 1) * RH)
     })
-    doc.setDrawColor(200,200,200); doc.line(15,y-4,195,y-4)
-    doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(17,17,17)
-    doc.text('Total Hours:',cols[4]-10,y+4); doc.setFontSize(13); doc.text(msToHM(totalMs),cols[5],y+4)
-    doc.setFont(undefined,'normal'); doc.setFontSize(8); doc.setTextColor(150,150,150)
-    doc.text('Generated by TimeTrack',105,285,{align:'center'})
+
+    // ── Data rows ──
+    const DAY_NAMES = ['Friday','Monday','Tuesday','Wednesday','Thursday']
+    let totalWorkedMs = 0, totalLunchMs = 0
+
+    doc.setFont(undefined, 'normal'); doc.setFontSize(10)
+
+    wd.forEach((date, i) => {
+      const r      = recs.find(x => x.date === date)
+      const worked = calcWorked(r)
+      const lunch  = calcLunch(r)
+      totalWorkedMs += worked
+      totalLunchMs  += lunch
+
+      const y = TT + i * RH + RH - 3.5
+
+      doc.setFont(undefined, 'normal'); doc.setFontSize(10)
+      doc.setTextColor(30, 20, 15)
+      doc.text(DAY_NAMES[i], C.day + 1, y)
+
+      const dateStr = new Date(date + 'T12:00:00').toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' })
+      doc.text(dateStr, C.date + 1, y)
+
+      doc.setFontSize(9.5)
+      if (r?.clockIn)  doc.text(fmt(r.clockIn),  C.start + 1, y)
+      if (r?.clockOut) doc.text(fmt(r.clockOut), C.end   + 1, y)
+      if (lunch > 0)   doc.text(msToHM(lunch),   C.lunch + 1, y)
+      if (worked > 0)  doc.text(msToHM(worked),  C.total + 1, y)
+    })
+
+    // ── Weekly Totals row ──
+    const totY = TT + rows * RH
+    doc.setFont(undefined, 'bold'); doc.setFontSize(9)
+    doc.setTextColor(80, 35, 20)
+    doc.text('WEEKLY TOTALS', C.day   + 1, totY + RH - 3.5)
+    doc.text('--',            C.date  + 1, totY + RH - 3.5)
+    doc.text('--',            C.start + 1, totY + RH - 3.5)
+    doc.text('--',            C.end   + 1, totY + RH - 3.5)
+    doc.setFontSize(10); doc.setFont(undefined, 'bold')
+    doc.setTextColor(30, 20, 15)
+    if (totalLunchMs  > 0) doc.text(msToHM(totalLunchMs),  C.lunch + 1, totY + RH - 3.5)
+    if (totalWorkedMs > 0) doc.text(msToHM(totalWorkedMs), C.total + 1, totY + RH - 3.5)
+
+    // ── Signature boxes ──
+    const sigTop = TT + (rows + 1) * RH + 14
+    const sigH   = 22
+    const sigW   = TW
+
+    doc.setDrawColor(120, 75, 55)
+    doc.setLineWidth(0.4)
+    doc.setFont(undefined, 'italic'); doc.setFontSize(10)
+    doc.setTextColor(80, 35, 20)
+
+    // Employee signature
+    doc.rect(TL, sigTop, sigW, sigH)
+    doc.text('Employee signature:', TL + 3, sigTop + 7)
+    // Signature line
+    doc.setLineWidth(0.3)
+    doc.line(TL + 45, sigTop + 16, TL + sigW - 4, sigTop + 16)
+
+    // Supervisor signature
+    doc.rect(TL, sigTop + sigH + 5, sigW, sigH)
+    doc.text('Supervisor signature:', TL + 3, sigTop + sigH + 12)
+    doc.line(TL + 47, sigTop + sigH + 21, TL + sigW - 4, sigTop + sigH + 21)
+
     return doc
   }
 
   const downloadAllPDFs = () => {
-    employees.forEach(emp => generatePDF(emp).save(`${emp.name.replace(/\s+/g,'-')}-week-${getToday()}.pdf`))
+    const wd = getWeekDates()
+    employees.forEach(emp => generatePDF(emp).save(`${emp.name.replace(/\s+/g,'-')}-timesheet-week-ending-${wd[4]}.pdf`))
     showToast(`Downloaded ${employees.length} PDF${employees.length!==1?'s':''}`)
   }
 
