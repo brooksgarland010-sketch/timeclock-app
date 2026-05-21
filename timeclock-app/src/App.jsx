@@ -294,15 +294,23 @@ export default function App() {
     doc.setFont(undefined, 'italic'); doc.setFontSize(10)
     doc.setTextColor(80, 35, 20)
 
-    // Employee signature
+    // Employee signature box
     doc.rect(TL, sigTop, sigW, sigH)
+    doc.setFont(undefined, 'italic'); doc.setFontSize(10)
+    doc.setTextColor(80, 35, 20)
     doc.text('Employee signature:', TL + 3, sigTop + 7)
     // Signature line
     doc.setLineWidth(0.3)
     doc.line(TL + 45, sigTop + 16, TL + sigW - 4, sigTop + 16)
+    // Auto employee signature — name written in italic on the line
+    doc.setFontSize(15); doc.setFont(undefined, 'italic')
+    doc.setTextColor(30, 30, 120)
+    doc.text(emp.name, TL + 48, sigTop + 15)
 
-    // Supervisor signature
+    // Supervisor signature box
     doc.rect(TL, sigTop + sigH + 5, sigW, sigH)
+    doc.setFontSize(10); doc.setFont(undefined, 'italic')
+    doc.setTextColor(80, 35, 20)
     doc.text('Supervisor signature:', TL + 3, sigTop + sigH + 12)
     doc.line(TL + 47, sigTop + sigH + 21, TL + sigW - 4, sigTop + sigH + 21)
 
@@ -315,21 +323,46 @@ export default function App() {
     showToast(`Downloaded ${employees.length} PDF${employees.length!==1?'s':''}`)
   }
 
-  const sendEmailReport = () => {
+  const sendEmailReport = async () => {
     if (!settings.email) { showToast('Set a report email in Settings first'); return }
     const wd = getWeekDates()
-    let body = `Weekly Time Reports\nWeek of ${fmtDate(wd[0])} to ${fmtDate(wd[4])}\n${'═'.repeat(50)}\n\n`
+
+    // Build PDF files for sharing
+    const files = employees.map(emp => {
+      const doc  = generatePDF(emp)
+      const blob = new Blob([doc.output('arraybuffer')], { type: 'application/pdf' })
+      return new File([blob], `${emp.name.replace(/\s+/g, '-')}-timesheet-${wd[4]}.pdf`, { type: 'application/pdf' })
+    })
+
+    // Try native share (mobile — opens Mail, AirDrop, Messages, etc.)
+    if (navigator.canShare && navigator.canShare({ files })) {
+      try {
+        await navigator.share({
+          files,
+          title: `Weekly Time Sheets — week ending ${fmtDate(wd[4])}`,
+        })
+        return
+      } catch (e) {
+        if (e.name !== 'AbortError') console.error(e)
+        return
+      }
+    }
+
+    // Desktop fallback — download PDFs + open mailto
+    downloadAllPDFs()
+    let body = `Weekly Time Sheets — week ending ${fmtDate(wd[4])}\n\nPDFs have been downloaded — please attach them to this email.\n\n`
     employees.forEach(emp => {
-      const recs = records.filter(r => r.empId === emp.id && wd.includes(r.date))
-      let total = 0; body += `${emp.name}\n${'─'.repeat(30)}\n`
-      wd.slice(0,5).forEach(date => {
-        const r = recs.find(x=>x.date===date); const w=calcWorked(r); total+=w
-        body += `${fmtDate(date)}: In ${r?.clockIn?fmt(r.clockIn):'--'} | Lunch ${r?.lunchStart?msToHM(calcLunch(r)):'--'} | Out ${r?.clockOut?fmt(r.clockOut):'--'} | ${w>0?msToHM(w):'No hours'}\n`
+      const recs  = records.filter(r => r.empId === emp.id && wd.includes(r.date))
+      let total   = 0
+      body += `${emp.name}\n${'─'.repeat(30)}\n`
+      wd.forEach(date => {
+        const r = recs.find(x => x.date === date); const w = calcWorked(r); total += w
+        body += `${fmtDate(date)}: In ${r?.clockIn?fmt(r.clockIn):'--'} | Out ${r?.clockOut?fmt(r.clockOut):'--'} | Lunch ${r?.lunchStart?msToHM(calcLunch(r)):'--'} | ${w>0?msToHM(w):'No hours'}\n`
       })
       body += `TOTAL: ${msToHM(total)}\n\n`
     })
-    window.open(`mailto:${settings.email}?subject=${encodeURIComponent(`Weekly Time Reports – ${fmtDate(wd[0])} to ${fmtDate(wd[4])}`)}&body=${encodeURIComponent(body)}`)
-    showToast('Opening email…')
+    window.open(`mailto:${settings.email}?subject=${encodeURIComponent(`Weekly Time Sheets – week ending ${fmtDate(wd[4])}`)}&body=${encodeURIComponent(body)}`)
+    showToast('PDFs downloaded — attach to email!')
   }
 
   const selEmp = employees.find(e => e.id === selEmpId) ?? null
