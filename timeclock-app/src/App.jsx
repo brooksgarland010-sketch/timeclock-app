@@ -81,14 +81,16 @@ const getWeekDates = () => {
   })
 }
 
+const calcLunch = r => {
+  if (!r?.lunches?.length) return 0
+  return r.lunches.reduce((sum, lb) => sum + Math.max(0, (lb.end ?? Date.now()) - lb.start), 0)
+}
 const calcWorked = r => {
   if (!r?.clockIn) return 0
   const end = r.clockOut ?? Date.now()
-  let ms = end - r.clockIn
-  if (r.lunchStart) ms -= ((r.lunchEnd ?? (r.clockOut ?? Date.now())) - r.lunchStart)
-  return Math.max(0, ms)
+  return Math.max(0, (end - r.clockIn) - calcLunch(r))
 }
-const calcLunch = r => r?.lunchStart ? Math.max(0,(r.lunchEnd??Date.now())-r.lunchStart) : 0
+const onLunch = r => r?.lunches?.length > 0 && !r.lunches[r.lunches.length - 1].end
 
 /* ─── Main App ─── */
 export default function App() {
@@ -232,14 +234,25 @@ export default function App() {
     const r = getTodayRec(empId)
     if (!r?.clockIn) return 'out'
     if (r.clockOut)  return 'done'
-    if (r.lunchStart&&!r.lunchEnd) return 'lunch'
+    if (onLunch(r))  return 'lunch'
     return 'in'
   }
 
-  const doClockIn    = async empId => { if(getTodayRec(empId)) return; await saveRecords([...records,{id:`${empId}-${Date.now()}`,empId,date:getToday(),clockIn:Date.now(),clockOut:null,lunchStart:null,lunchEnd:null}]) }
-  const doClockOut   = async empId => await saveRecords(records.map(r=>r.empId===empId&&r.date===getToday()?{...r,clockOut:Date.now(),lunchEnd:r.lunchStart&&!r.lunchEnd?Date.now():r.lunchEnd}:r))
-  const doLunchStart = async empId => await saveRecords(records.map(r=>r.empId===empId&&r.date===getToday()?{...r,lunchStart:Date.now()}:r))
-  const doLunchEnd   = async empId => await saveRecords(records.map(r=>r.empId===empId&&r.date===getToday()?{...r,lunchEnd:Date.now()}:r))
+  const doClockIn    = async empId => { if(getTodayRec(empId)) return; await saveRecords([...records,{id:`${empId}-${Date.now()}`,empId,date:getToday(),clockIn:Date.now(),clockOut:null,lunches:[]}]) }
+  const doClockOut   = async empId => {
+    const updated = records.map(r => {
+      if(r.empId!==empId||r.date!==getToday()) return r
+      const lunches = onLunch(r) ? r.lunches.map((lb,i)=>i===r.lunches.length-1&&!lb.end?{...lb,end:Date.now()}:lb) : (r.lunches||[])
+      return {...r, clockOut:Date.now(), lunches}
+    })
+    await saveRecords(updated)
+  }
+  const doLunchStart = async empId => await saveRecords(records.map(r=>r.empId===empId&&r.date===getToday()?{...r,lunches:[...(r.lunches||[]),{start:Date.now(),end:null}]}:r))
+  const doLunchEnd   = async empId => await saveRecords(records.map(r=>{
+    if(r.empId!==empId||r.date!==getToday()) return r
+    const lunches=(r.lunches||[]).map((lb,i)=>i===r.lunches.length-1&&!lb.end?{...lb,end:Date.now()}:lb)
+    return {...r,lunches}
+  }))
 
   /* ─── Admin: add/remove employee ─── */
   const addEmployee = async () => {
@@ -505,10 +518,15 @@ export default function App() {
                 {rec&&(
                   <div className="card" style={{marginBottom:18}}>
                     <div className="label">Today's record</div>
-                    {[['Clock in',fmt(rec.clockIn)],['Lunch start',fmt(rec.lunchStart)],['Lunch end',fmt(rec.lunchEnd)],['Clock out',fmt(rec.clockOut)]].map(([l,v])=>(
-                      <div className="time-row" key={l}><span className="t-label">{l}</span><span className="t-val">{v}</span></div>
+                    <div className="time-row"><span className="t-label">Clock in</span><span className="t-val">{fmt(rec.clockIn)}</span></div>
+                    {(rec.lunches||[]).map((lb,i)=>(
+                      <div key={i}>
+                        <div className="time-row"><span className="t-label">Lunch {(rec.lunches||[]).length>1?i+1:''} start</span><span className="t-val">{fmt(lb.start)}</span></div>
+                        <div className="time-row"><span className="t-label">Lunch {(rec.lunches||[]).length>1?i+1:''} end</span><span className="t-val">{lb.end?fmt(lb.end):'ongoing'}</span></div>
+                      </div>
                     ))}
-                    {ln>0&&<div className="time-row"><span className="t-label">Lunch duration</span><span className="t-val">{msToHM(ln)}</span></div>}
+                    <div className="time-row"><span className="t-label">Clock out</span><span className="t-val">{fmt(rec.clockOut)}</span></div>
+                    {ln>0&&<div className="time-row"><span className="t-label">Total lunch</span><span className="t-val">{msToHM(ln)}</span></div>}
                   </div>
                 )}
                 <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:24}}>
@@ -547,10 +565,15 @@ export default function App() {
                 {rec&&(
                   <div className="card" style={{marginBottom:18}}>
                     <div className="label">Today's record</div>
-                    {[['Clock in',fmt(rec.clockIn)],['Lunch start',fmt(rec.lunchStart)],['Lunch end',fmt(rec.lunchEnd)],['Clock out',fmt(rec.clockOut)]].map(([l,v])=>(
-                      <div className="time-row" key={l}><span className="t-label">{l}</span><span className="t-val">{v}</span></div>
+                    <div className="time-row"><span className="t-label">Clock in</span><span className="t-val">{fmt(rec.clockIn)}</span></div>
+                    {(rec.lunches||[]).map((lb,i)=>(
+                      <div key={i}>
+                        <div className="time-row"><span className="t-label">Lunch {(rec.lunches||[]).length>1?i+1:''} start</span><span className="t-val">{fmt(lb.start)}</span></div>
+                        <div className="time-row"><span className="t-label">Lunch {(rec.lunches||[]).length>1?i+1:''} end</span><span className="t-val">{lb.end?fmt(lb.end):'ongoing'}</span></div>
+                      </div>
                     ))}
-                    {ln>0&&<div className="time-row"><span className="t-label">Lunch duration</span><span className="t-val">{msToHM(ln)}</span></div>}
+                    <div className="time-row"><span className="t-label">Clock out</span><span className="t-val">{fmt(rec.clockOut)}</span></div>
+                    {ln>0&&<div className="time-row"><span className="t-label">Total lunch</span><span className="t-val">{msToHM(ln)}</span></div>}
                   </div>
                 )}
                 <div className="label">This week</div>
