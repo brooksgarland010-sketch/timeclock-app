@@ -126,6 +126,20 @@ export default function App() {
   const [offerBio,   setOfferBio]   = useState(false)
   const [pendingBio, setPendingBio] = useState(null)
 
+  // Manual time edit
+  const [editDate,     setEditDate]     = useState(null)
+  const [editEmpId,    setEditEmpId]    = useState(null)
+  const [editClockIn,  setEditClockIn]  = useState('')
+  const [editClockOut, setEditClockOut] = useState('')
+  const [editLunches,  setEditLunches]  = useState([])
+
+  // Manual time edit
+  const [editDate,     setEditDate]     = useState(null)
+  const [editEmpId,    setEditEmpId]    = useState(null)
+  const [editClockIn,  setEditClockIn]  = useState('')
+  const [editClockOut, setEditClockOut] = useState('')
+  const [editLunches,  setEditLunches]  = useState([])
+
   const loadAll = async () => {
     const [usrs,emps,recs,sett] = await Promise.all([fbGet('users'),fbGet('employees'),fbGet('records'),fbGet('settings')])
     if (usrs && typeof usrs==='object') setUsers(usrs)
@@ -253,6 +267,54 @@ export default function App() {
     const lunches=(r.lunches||[]).map((lb,i)=>i===r.lunches.length-1&&!lb.end?{...lb,end:Date.now()}:lb)
     return {...r,lunches}
   }))
+
+  /* ─── Manual time edit helpers ─── */
+  const tsToTimeStr = ts => {
+    if (!ts) return ''
+    const d = new Date(ts)
+    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+  }
+  const timeStrToTs = (timeStr, dateStr) => {
+    if (!timeStr) return null
+    const [h, m] = timeStr.split(':').map(Number)
+    const d = new Date(dateStr + 'T00:00:00')
+    d.setHours(h, m, 0, 0)
+    return d.getTime()
+  }
+  const openEdit = (empId, date) => {
+    const rec = records.find(r => r.empId===empId && r.date===date)
+    setEditEmpId(empId)
+    setEditDate(date)
+    setEditClockIn(rec ? tsToTimeStr(rec.clockIn) : '')
+    setEditClockOut(rec ? tsToTimeStr(rec.clockOut) : '')
+    setEditLunches(rec?.lunches?.map(lb=>({start:tsToTimeStr(lb.start),end:tsToTimeStr(lb.end??null)})) || [])
+    setView('edit')
+  }
+  const saveEdit = async () => {
+    const clockInTs  = timeStrToTs(editClockIn, editDate)
+    const clockOutTs = timeStrToTs(editClockOut, editDate)
+    if (!clockInTs) { showToast('Clock in time is required'); return }
+    const lunches = editLunches.filter(lb=>lb.start).map(lb=>({
+      start: timeStrToTs(lb.start, editDate),
+      end:   lb.end ? timeStrToTs(lb.end, editDate) : null
+    }))
+    const existing = records.find(r=>r.empId===editEmpId&&r.date===editDate)
+    let updated
+    if (existing) {
+      updated = records.map(r=>r.empId===editEmpId&&r.date===editDate?{...r,clockIn:clockInTs,clockOut:clockOutTs,lunches}:r)
+    } else {
+      updated = [...records, {id:`${editEmpId}-manual-${Date.now()}`,empId:editEmpId,date:editDate,clockIn:clockInTs,clockOut:clockOutTs,lunches}]
+    }
+    await saveRecords(updated)
+    showToast('Times saved!')
+    setView(isAdmin ? 'employee' : 'home')
+  }
+  const clearMyWeek = async () => {
+    if (!confirm('Clear all your time records for this week? This cannot be undone.')) return
+    const wd = getWeekDates()
+    await saveRecords(records.filter(r=>!(r.empId===currentUser?.empId&&wd.includes(r.date))))
+    showToast('Your week records cleared')
+  }
 
   /* ─── Admin: add/remove employee ─── */
   const addEmployee = async () => {
@@ -539,7 +601,7 @@ export default function App() {
                 <div style={{display:'flex',flexDirection:'column',gap:4}}>
                   {wd.slice(0,5).map(date=>{
                     const r=wRecs.find(x=>x.date===date),dw=calcWorked(r),isToday=date===getToday()
-                    return <div key={date} className={`week-row ${isToday?'today':dw>0?'worked':''}`}><span className="wday">{fmtDate(date)}</span><span className="whrs">{dw>0?msToHM(dw):'—'}</span></div>
+                    return <div key={date} className={`week-row ${isToday?'today':dw>0?'worked':''}`} style={{display:'flex',alignItems:'center'}}><span className="wday" style={{flex:1}}>{fmtDate(date)}</span><span className="whrs" style={{marginRight:8}}>{dw>0?msToHM(dw):'—'}</span><button onClick={()=>openEdit(myEmp.id,date)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted)',fontSize:15,padding:'2px 4px',lineHeight:1}} title="Edit times"><i className="ti ti-pencil" aria-hidden="true"/></button></div>
                   })}
                 </div>
               </div>
@@ -580,7 +642,7 @@ export default function App() {
                 <div style={{display:'flex',flexDirection:'column',gap:4}}>
                   {wd.slice(0,5).map(date=>{
                     const r=wRecs.find(x=>x.date===date),dw=calcWorked(r),isToday=date===getToday()
-                    return <div key={date} className={`week-row ${isToday?'today':dw>0?'worked':''}`}><span className="wday">{fmtDate(date)}</span><span className="whrs">{dw>0?msToHM(dw):'—'}</span></div>
+                    return <div key={date} className={`week-row ${isToday?'today':dw>0?'worked':''}`} style={{display:'flex',alignItems:'center'}}><span className="wday" style={{flex:1}}>{fmtDate(date)}</span><span className="whrs" style={{marginRight:8}}>{dw>0?msToHM(dw):'—'}</span><button onClick={()=>openEdit(emp.id,date)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted)',fontSize:15,padding:'2px 4px',lineHeight:1}} title="Edit times"><i className="ti ti-pencil" aria-hidden="true"/></button></div>
                   })}
                 </div>
               </div>
@@ -633,6 +695,69 @@ export default function App() {
             </div>
           </>
         )}
+
+        {/* ── EDIT DAY ── */}
+        {view==='edit' && editDate && (()=>{
+          const emp = employees.find(e=>e.id===editEmpId)
+          const dateLabel = new Date(editDate+'T12:00:00').toLocaleDateString([],{weekday:'long',month:'long',day:'numeric'})
+          const inputStyle = {padding:'10px 13px',borderRadius:8,border:'0.5px solid var(--border-strong)',background:'#fff',color:'#111',fontSize:15,width:'100%',fontFamily:'inherit'}
+          return (
+            <>
+              <div className="page-header">
+                <div>
+                  <button className="back-btn" onClick={()=>setView(isAdmin?'employee':'home')}><i className="ti ti-arrow-left" aria-hidden="true"/> Back</button>
+                  <div className="page-heading">Edit Times</div>
+                </div>
+              </div>
+              <div style={{padding:16}}>
+                <div style={{fontSize:14,color:'var(--muted)',marginBottom:16}}>{emp?.name} — {dateLabel}</div>
+
+                <div className="label">Clock In</div>
+                <input type="time" value={editClockIn} onChange={e=>setEditClockIn(e.target.value)} style={{...inputStyle,marginBottom:16}}/>
+
+                <div className="label">Clock Out</div>
+                <input type="time" value={editClockOut} onChange={e=>setEditClockOut(e.target.value)} style={{...inputStyle,marginBottom:16}}/>
+
+                <div className="label">Lunch Breaks</div>
+                {editLunches.map((lb,i)=>(
+                  <div key={i} style={{background:'#fff',border:'0.5px solid var(--border)',borderRadius:10,padding:'12px',marginBottom:8}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+                      <span style={{fontSize:13,fontWeight:600}}>Lunch {editLunches.length>1?i+1:''}</span>
+                      <button onClick={()=>setEditLunches(editLunches.filter((_,j)=>j!==i))} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted)',fontSize:18,padding:0}}>
+                        <i className="ti ti-trash" aria-hidden="true"/>
+                      </button>
+                    </div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                      <div>
+                        <div style={{fontSize:11,color:'var(--muted)',marginBottom:4}}>START</div>
+                        <input type="time" value={lb.start||''} onChange={e=>{const l=[...editLunches];l[i]={...l[i],start:e.target.value};setEditLunches(l)}} style={{...inputStyle}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:11,color:'var(--muted)',marginBottom:4}}>END</div>
+                        <input type="time" value={lb.end||''} onChange={e=>{const l=[...editLunches];l[i]={...l[i],end:e.target.value};setEditLunches(l)}} style={{...inputStyle}}/>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <button className="btn" onClick={()=>setEditLunches([...editLunches,{start:'',end:''}])} style={{marginBottom:24}}>
+                  <i className="ti ti-plus" aria-hidden="true"/> Add Lunch Break
+                </button>
+
+                <button className="btn btn-primary" onClick={saveEdit} style={{marginBottom:10}}>
+                  <i className="ti ti-check" aria-hidden="true"/> Save Changes
+                </button>
+                <button className="btn btn-danger" onClick={async()=>{
+                  if(!confirm('Clear times for this day?')) return
+                  await saveRecords(records.filter(r=>!(r.empId===editEmpId&&r.date===editDate)))
+                  showToast('Day cleared')
+                  setView(isAdmin?'employee':'home')
+                }}>
+                  <i className="ti ti-trash" aria-hidden="true"/> Clear This Day
+                </button>
+              </div>
+            </>
+          )
+        })()}
 
         {/* ── REPORTS (admin only) ── */}
         {view==='reports' && isAdmin && (
@@ -704,6 +829,15 @@ export default function App() {
                   <div className="label">Data management</div>
                   <button className="btn btn-danger" onClick={()=>{if(confirm('Clear all time records?')){saveRecords([]);showToast('Records cleared')}}} style={{marginBottom:16}}>
                     <i className="ti ti-trash" aria-hidden="true"/> Clear All Time Records
+                  </button>
+                </>
+              )}
+
+              {!isAdmin && (
+                <>
+                  <div className="label">My Records</div>
+                  <button className="btn btn-danger" onClick={clearMyWeek} style={{marginBottom:16}}>
+                    <i className="ti ti-calendar-x" aria-hidden="true"/> Clear My Week Records
                   </button>
                 </>
               )}
