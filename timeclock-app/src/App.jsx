@@ -65,6 +65,12 @@ const onLunch = r => r?.lunches?.length>0 && !r.lunches[r.lunches.length-1].end
 const tsToTimeStr = ts => { if(!ts) return ''; const d=new Date(ts); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}` }
 const timeStrToTs = (s,dateStr) => { if(!s) return null; const [h,m]=s.split(':').map(Number),d=new Date(dateStr+'T00:00:00'); d.setHours(h,m,0,0); return d.getTime() }
 
+const haptic = (style='light') => {
+  if (!navigator.vibrate) return
+  const patterns = { light:[10], medium:[20], heavy:[30], success:[10,50,10], error:[50,30,50] }
+  navigator.vibrate(patterns[style] || [10])
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null)
   const [users,       setUsers]       = useState({})
@@ -116,6 +122,27 @@ export default function App() {
     return()=>{ document.removeEventListener('visibilitychange',onVis); clearInterval(t) }
   },[])
 
+  useEffect(()=>{
+    const handle = e => {
+      const btn = e.target.closest('button')
+      if (!btn || btn.disabled) return
+      // haptic — reads data-haptic attribute, defaults to 'light'
+      haptic(btn.dataset.haptic || 'light')
+      // ripple — expand from tap point
+      const rect = btn.getBoundingClientRect()
+      const size = Math.max(rect.width, rect.height) * 2
+      const x = e.clientX - rect.left - size / 2
+      const y = e.clientY - rect.top  - size / 2
+      const el = document.createElement('span')
+      el.className = 'ripple'
+      el.style.cssText = `width:${size}px;height:${size}px;left:${x}px;top:${y}px`
+      btn.appendChild(el)
+      el.addEventListener('animationend', () => el.remove(), { once: true })
+    }
+    document.addEventListener('pointerdown', handle)
+    return () => document.removeEventListener('pointerdown', handle)
+  },[])
+
   const showToast = msg => { setToast(msg); setTimeout(()=>setToast(''),3000) }
   const saveEmployees = async e => { setEmployees(e); await fbSet('employees',e) }
   const saveRecords   = async r => { setRecords(r);   await fbSet('records',r) }
@@ -124,12 +151,12 @@ export default function App() {
 
   const doLogin = async () => {
     const username=loginUserRef.current.trim(), password=loginPassRef.current
-    if(!username||!password){ setLoginError('Please enter username and password'); return }
+    if(!username||!password){ setLoginError('Please enter username and password'); haptic('error'); return }
     setLoginLoad(true); setLoginError('')
     try {
       const hash=await hashPassword(password)
       const match=Object.entries(users).find(([,u])=>u.username.toLowerCase()===username.toLowerCase()&&u.passwordHash===hash)
-      if(!match){ setLoginError('Invalid username or password'); setLoginLoad(false); return }
+      if(!match){ setLoginError('Invalid username or password'); haptic('error'); setLoginLoad(false); return }
       const [userId,userData]=match
       const session={userId,username:userData.username,role:userData.role,empId:userData.empId??null}
       localStorage.setItem('tc_session',JSON.stringify(session)); setCurrentUser(session)
@@ -198,7 +225,7 @@ export default function App() {
     const updated=existing
       ? records.map(r=>r.empId===editEmpId&&r.date===editDate?{...r,clockIn:clockInTs,clockOut:clockOutTs,lunches}:r)
       : [...records,{id:`${editEmpId}-manual-${Date.now()}`,empId:editEmpId,date:editDate,clockIn:clockInTs,clockOut:clockOutTs,lunches}]
-    await saveRecords(updated); showToast('Times saved!')
+    await saveRecords(updated); haptic('success'); showToast('Times saved!')
     setView(isAdmin?'employee':'home')
   }
 
@@ -220,7 +247,7 @@ export default function App() {
     if(newNameInput.current) newNameInput.current.value=''
     if(newUserInput.current) newUserInput.current.value=''
     if(newPassInput.current) newPassInput.current.value=''
-    showToast(`${name} added!`)
+    haptic('success'); showToast(`${name} added!`)
   }
 
   const removeEmployee = async id => {
@@ -457,14 +484,14 @@ export default function App() {
               <div style={{padding:'18px 18px 0'}}>
                 {/* Action buttons */}
                 <div className="action-area">
-                  {st==='out'   && <button className="btn btn-green" onClick={()=>doClockIn(myEmp.id)}><i className="ti ti-clock" aria-hidden="true"/> Clock In</button>}
+                  {st==='out'   && <button className="btn btn-green" data-haptic="medium" onClick={()=>doClockIn(myEmp.id)}><i className="ti ti-clock" aria-hidden="true"/> Clock In</button>}
                   {st==='in'    && <>
                     <button className="btn btn-amber" onClick={()=>doLunchStart(myEmp.id)}><i className="ti ti-soup" aria-hidden="true"/> Start Lunch</button>
-                    <button className="btn" onClick={()=>doClockOut(myEmp.id)}><i className="ti ti-clock-off" aria-hidden="true"/> Clock Out</button>
+                    <button className="btn" data-haptic="medium" onClick={()=>doClockOut(myEmp.id)}><i className="ti ti-clock-off" aria-hidden="true"/> Clock Out</button>
                   </>}
                   {st==='lunch' && <>
                     <button className="btn btn-amber" onClick={()=>doLunchEnd(myEmp.id)}><i className="ti ti-soup" aria-hidden="true"/> End Lunch</button>
-                    <button className="btn" onClick={()=>doClockOut(myEmp.id)}><i className="ti ti-clock-off" aria-hidden="true"/> Clock Out</button>
+                    <button className="btn" data-haptic="medium" onClick={()=>doClockOut(myEmp.id)}><i className="ti ti-clock-off" aria-hidden="true"/> Clock Out</button>
                   </>}
                   {st==='done'  && (
                     <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:10,padding:'16px 0',color:'var(--green)',fontSize:14,fontWeight:600}}>
@@ -573,7 +600,7 @@ export default function App() {
                 ))}
                 <button className="btn" onClick={()=>setEditLunches([...editLunches,{start:'',end:''}])} style={{marginBottom:26}}><i className="ti ti-plus" aria-hidden="true"/> Add Lunch Break</button>
                 <button className="btn btn-primary" onClick={saveEdit} style={{marginBottom:10}}><i className="ti ti-check" aria-hidden="true"/> Save Changes</button>
-                <button className="btn btn-danger" onClick={async()=>{ if(!confirm('Clear times for this day?')) return; await saveRecords(records.filter(r=>!(r.empId===editEmpId&&r.date===editDate))); showToast('Day cleared'); setView(isAdmin?'employee':'home') }}><i className="ti ti-trash" aria-hidden="true"/> Clear This Day</button>
+                <button className="btn btn-danger" data-haptic="heavy" onClick={async()=>{ if(!confirm('Clear times for this day?')) return; await saveRecords(records.filter(r=>!(r.empId===editEmpId&&r.date===editDate))); showToast('Day cleared'); setView(isAdmin?'employee':'home') }}><i className="ti ti-trash" aria-hidden="true"/> Clear This Day</button>
               </div>
             </>
           )
@@ -716,7 +743,7 @@ export default function App() {
                             <div style={{fontSize:11,color:'var(--muted)',marginBottom:4}}>@{empUser?.username||'—'}</div>
                             <span className="pill" style={{background:sc.bg,color:sc.color}}>{sc.label}</span>
                           </div>
-                          <button onClick={()=>removeEmployee(emp.id)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted-light)',fontSize:20,lineHeight:1,padding:6}}><i className="ti ti-trash" aria-hidden="true"/></button>
+                          <button data-haptic="heavy" onClick={()=>removeEmployee(emp.id)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted-light)',fontSize:20,lineHeight:1,padding:6}}><i className="ti ti-trash" aria-hidden="true"/></button>
                         </div>
                       )
                     })}
@@ -757,15 +784,15 @@ export default function App() {
                 <>
                   <div className="label">Report email address</div>
                   <input className="text-input" type="email" value={settEmail} onChange={e=>setSettEmail(e.target.value)} placeholder="reports@yourcompany.com" style={{marginBottom:10}}/>
-                  <button className="btn btn-primary" onClick={()=>{saveSettings({...settings,email:settEmail});showToast('Email saved!')}} style={{marginBottom:26}}><i className="ti ti-check" aria-hidden="true"/> Save Email</button>
+                  <button className="btn btn-primary" onClick={()=>{saveSettings({...settings,email:settEmail});haptic('success');showToast('Email saved!')}} style={{marginBottom:26}}><i className="ti ti-check" aria-hidden="true"/> Save Email</button>
                   <div className="label">Data management</div>
-                  <button className="btn btn-danger" onClick={()=>{if(confirm('Clear ALL time records?')){saveRecords([]);showToast('Records cleared')}}} style={{marginBottom:20}}><i className="ti ti-trash" aria-hidden="true"/> Clear All Time Records</button>
+                  <button className="btn btn-danger" data-haptic="heavy" onClick={()=>{if(confirm('Clear ALL time records?')){saveRecords([]);showToast('Records cleared')}}} style={{marginBottom:20}}><i className="ti ti-trash" aria-hidden="true"/> Clear All Time Records</button>
                 </>
               )}
               {!isAdmin&&(
                 <>
                   <div className="label">My Records</div>
-                  <button className="btn btn-danger" onClick={clearMyWeek} style={{marginBottom:20}}><i className="ti ti-calendar-x" aria-hidden="true"/> Clear My Week Records</button>
+                  <button className="btn btn-danger" data-haptic="heavy" onClick={clearMyWeek} style={{marginBottom:20}}><i className="ti ti-calendar-x" aria-hidden="true"/> Clear My Week Records</button>
                 </>
               )}
               <div className="label">Account</div>
