@@ -106,6 +106,8 @@ export default function App() {
   const newUserRef=useRef('');   const newUserInput=useRef(null)
   const newPassRef=useRef('');   const newPassInput=useRef(null)
   const treeNameRef=useRef('');  const treeNameInput=useRef(null)
+  const treeUserRef=useRef('');  const treeUserInput=useRef(null)
+  const treePassRef=useRef('');  const treePassInput=useRef(null)
 
   const loadAll = async () => {
     const [usrs,emps,recs,sett,tCrew,tRecs] = await Promise.all([fbGet('users'),fbGet('employees'),fbGet('records'),fbGet('settings'),fbGet('treeCrew'),fbGet('treeRecords')])
@@ -160,16 +162,34 @@ export default function App() {
   const saveTreeRecords = async r => { setTreeRecords(r); await fbSet('treeRecords',r) }
   const recSrc = tree => tree ? [treeRecords, saveTreeRecords] : [records, saveRecords]
 
+  const usernameTaken = username => Object.values(users).some(u=>u.username.toLowerCase()===username.toLowerCase())
+  const addTreeLogin = async (crewId, username, password) => {
+    const hash=await hashPassword(password)
+    await saveUsers({...users,[`user_${Date.now()+1}`]:{username,passwordHash:hash,role:'tree',empId:crewId}})
+  }
   const addTreeCrew = async () => {
-    const name=treeNameRef.current.trim()
-    if(!name){ showToast('Enter a name'); return }
-    await saveTreeCrew([...treeCrew,{id:Date.now(),name,color:COLORS[treeCrew.length%COLORS.length]}])
-    treeNameRef.current=''; if(treeNameInput.current) treeNameInput.current.value=''
+    const name=treeNameRef.current.trim(), username=treeUserRef.current.trim(), password=treePassRef.current.trim()
+    if(!name||!username||!password){ showToast('Please fill in all fields'); return }
+    if(usernameTaken(username)){ showToast('Username already taken'); return }
+    const id=Date.now()
+    await saveTreeCrew([...treeCrew,{id,name,color:COLORS[treeCrew.length%COLORS.length]}])
+    await addTreeLogin(id, username, password)
+    treeNameRef.current=''; treeUserRef.current=''; treePassRef.current=''
+    ;[treeNameInput,treeUserInput,treePassInput].forEach(r=>{ if(r.current) r.current.value='' })
     haptic('success'); showToast(`${name} added to the tree lot`)
   }
+  const setTreeLogin = async crewId => {
+    const username=treeUserRef.current.trim(), password=treePassRef.current.trim()
+    if(!username||!password){ showToast('Enter a username and password'); return }
+    if(usernameTaken(username)){ showToast('Username already taken'); return }
+    await addTreeLogin(crewId, username, password)
+    treeUserRef.current=''; treePassRef.current=''
+    haptic('success'); showToast('Login created')
+  }
   const removeTreeCrew = async id => {
-    if(!confirm('Remove this person from the tree lot crew? Their logged hours stay saved.')) return false
+    if(!confirm('Remove this person and their login from the tree lot? Their logged hours stay saved.')) return false
     await saveTreeCrew(treeCrew.filter(c=>c.id!==id))
+    const updated={...users}; Object.entries(updated).forEach(([uid,u])=>{ if(u.role==='tree'&&u.empId===id) delete updated[uid] }); await saveUsers(updated)
     return true
   }
 
@@ -253,12 +273,12 @@ export default function App() {
     await save(updated); haptic('success'); showToast('Times saved!')
     setView(editBackView())
   }
-  const editBackView = () => editTree ? 'treeMember' : isAdmin ? 'employee' : 'home'
+  const editBackView = () => editTree ? (isAdmin ? 'treeMember' : 'home') : isAdmin ? 'employee' : 'home'
 
   const clearMyWeek = async () => {
     if(!confirm('Clear all your time records for this week?')) return
-    const wd=getWeekDates()
-    await saveRecords(records.filter(r=>!(r.empId===currentUser?.empId&&wd.includes(r.date))))
+    const wd=isTree?getTreeWeekDates():getWeekDates(), [recs,save]=recSrc(isTree)
+    await save(recs.filter(r=>!(r.empId===currentUser?.empId&&wd.includes(r.date))))
     showToast('Your week records cleared')
   }
 
@@ -279,7 +299,7 @@ export default function App() {
   const removeEmployee = async id => {
     if(!confirm('Remove this employee and their login?')) return
     await saveEmployees(employees.filter(e=>e.id!==id))
-    const updated={...users}; Object.entries(updated).forEach(([uid,u])=>{ if(u.empId===id) delete updated[uid] }); await saveUsers(updated)
+    const updated={...users}; Object.entries(updated).forEach(([uid,u])=>{ if(u.role==='employee'&&u.empId===id) delete updated[uid] }); await saveUsers(updated)
   }
 
   const generatePDF = (emp, weekOffset=0) => {
@@ -358,7 +378,9 @@ export default function App() {
   }
 
   const selEmp=employees.find(e=>e.id===selEmpId)??null
-  const myEmp =employees.find(e=>e.id===currentUser?.empId)??null
+  const isTree=currentUser?.role==='tree'
+  const myEmp =(isTree?treeCrew:employees).find(e=>e.id===currentUser?.empId)??null
+  const myWd  =isTree?getTreeWeekDates():getWeekDates()
   const wd    =getWeekDates()
   const isAdmin=currentUser?.role==='admin'
 
@@ -424,7 +446,8 @@ export default function App() {
 
   const NAV_ADMIN   =[{id:'home',icon:'ti-home',label:'Home'},{id:'trees',icon:'ti-christmas-tree',label:'Tree Lot'},{id:'reports',icon:'ti-chart-bar',label:'Reports'},{id:'history',icon:'ti-clock-record',label:'History'},{id:'employees',icon:'ti-users',label:'Employees'},{id:'settings',icon:'ti-settings',label:'Settings'}]
   const NAV_EMPLOYEE=[{id:'home',icon:'ti-clock',label:'My Time'},{id:'settings',icon:'ti-settings',label:'Settings'}]
-  const NAV_ITEMS   =isAdmin?NAV_ADMIN:NAV_EMPLOYEE
+  const NAV_TREE    =[{id:'home',icon:'ti-christmas-tree',label:'My Time'},{id:'settings',icon:'ti-settings',label:'Settings'}]
+  const NAV_ITEMS   =isAdmin?NAV_ADMIN:isTree?NAV_TREE:NAV_EMPLOYEE
 
   const WeekRow = ({date, empId, tree=false}) => {
     const r=recSrc(tree)[0].find(x=>x.empId===empId&&x.date===date)
@@ -485,13 +508,13 @@ export default function App() {
 
         {/* HOME - EMPLOYEE */}
         {view==='home'&&!isAdmin&&myEmp&&(()=>{
-          const st=getStatus(myEmp.id),rec=getTodayRec(myEmp.id),w=calcWorked(rec),ln=calcLunch(rec),sc=STATUS_CONFIG[st]
-          const wRecs=records.filter(r=>r.empId===myEmp.id&&wd.includes(r.date)),wTotal=wRecs.reduce((s,r)=>s+calcWorked(r),0)
+          const st=getStatus(myEmp.id,isTree),rec=getTodayRec(myEmp.id,isTree),w=calcWorked(rec),ln=calcLunch(rec),sc=STATUS_CONFIG[st]
+          const wRecs=recSrc(isTree)[0].filter(r=>r.empId===myEmp.id&&myWd.includes(r.date)),wTotal=wRecs.reduce((s,r)=>s+calcWorked(r),0)
           return(
             <>
               <div className="page-header">
                 <div>
-                  <div className="app-title">TimeTrack</div>
+                  <div className="app-title">{isTree?'TimeTrack · Tree Lot':'TimeTrack'}</div>
                   <div className="page-heading">{new Date().toLocaleDateString([],{weekday:'long',month:'long',day:'numeric'})}</div>
                 </div>
                 <div className="avatar" style={{background:myEmp.color,width:34,height:34,fontSize:11}}>{initials(myEmp.name)}</div>
@@ -510,14 +533,14 @@ export default function App() {
               <div style={{padding:'18px 18px 0'}}>
                 {/* Action buttons */}
                 <div className="action-area">
-                  {st==='out'   && <button className="btn btn-green" data-haptic="medium" onClick={()=>doClockIn(myEmp.id)}><i className="ti ti-clock" aria-hidden="true"/> Clock In</button>}
+                  {st==='out'   && <button className="btn btn-green" data-haptic="medium" onClick={()=>doClockIn(myEmp.id,isTree)}><i className="ti ti-clock" aria-hidden="true"/> Clock In</button>}
                   {st==='in'    && <>
-                    <button className="btn btn-amber" onClick={()=>doLunchStart(myEmp.id)}><i className="ti ti-soup" aria-hidden="true"/> Start Lunch</button>
-                    <button className="btn" data-haptic="medium" onClick={()=>doClockOut(myEmp.id)}><i className="ti ti-clock-off" aria-hidden="true"/> Clock Out</button>
+                    <button className="btn btn-amber" onClick={()=>doLunchStart(myEmp.id,isTree)}><i className="ti ti-soup" aria-hidden="true"/> Start Lunch</button>
+                    <button className="btn" data-haptic="medium" onClick={()=>doClockOut(myEmp.id,isTree)}><i className="ti ti-clock-off" aria-hidden="true"/> Clock Out</button>
                   </>}
                   {st==='lunch' && <>
-                    <button className="btn btn-amber" onClick={()=>doLunchEnd(myEmp.id)}><i className="ti ti-soup" aria-hidden="true"/> End Lunch</button>
-                    <button className="btn" data-haptic="medium" onClick={()=>doClockOut(myEmp.id)}><i className="ti ti-clock-off" aria-hidden="true"/> Clock Out</button>
+                    <button className="btn btn-amber" onClick={()=>doLunchEnd(myEmp.id,isTree)}><i className="ti ti-soup" aria-hidden="true"/> End Lunch</button>
+                    <button className="btn" data-haptic="medium" onClick={()=>doClockOut(myEmp.id,isTree)}><i className="ti ti-clock-off" aria-hidden="true"/> Clock Out</button>
                   </>}
                   {st==='done'  && (
                     <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:10,padding:'16px 0',color:'var(--green)',fontSize:14,fontWeight:600}}>
@@ -543,9 +566,9 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="label">This week</div>
+                <div className="label">{isTree?'This week · Fri – Thu':'This week'}</div>
                 <div style={{display:'flex',flexDirection:'column',gap:4}}>
-                  {wd.map(date=><WeekRow key={date} date={date} empId={myEmp.id}/>)}
+                  {myWd.map(date=><WeekRow key={date} date={date} empId={myEmp.id} tree={isTree}/>)}
                 </div>
               </div>
             </>
@@ -652,7 +675,8 @@ export default function App() {
                       <div key={c.id} className="card emp-row" onClick={()=>{setSelTreeId(c.id);setView('treeMember')}}>
                         <div className="avatar" style={{background:c.color}}>{initials(c.name)}</div>
                         <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontWeight:700,fontSize:15,letterSpacing:'-0.01em',marginBottom:4}}>{c.name}</div>
+                          <div style={{fontWeight:700,fontSize:15,letterSpacing:'-0.01em',marginBottom:2}}>{c.name}</div>
+                          <div style={{fontSize:11,color:'var(--muted)',marginBottom:4}}>@{Object.values(users).find(u=>u.role==='tree'&&u.empId===c.id)?.username||'no login'}</div>
                           <div style={{display:'flex',alignItems:'center',gap:6}}>
                             <span className="pill" style={{background:sc.bg,color:sc.color}}>{sc.label}</span>
                             {w>0&&<span style={{fontSize:12,color:'var(--muted)',fontVariantNumeric:'tabular-nums'}}>{msToHM(w)}</span>}
@@ -668,9 +692,11 @@ export default function App() {
                   })
                 }
                 <div className="label" style={{marginTop:18}}>Add to tree lot crew</div>
-                <div style={{display:'flex',gap:10}}>
-                  <input ref={treeNameInput} placeholder="Full name" autoComplete="off" onChange={e=>treeNameRef.current=e.target.value} onKeyDown={e=>e.key==='Enter'&&addTreeCrew()} style={inputStyle}/>
-                  <button onClick={addTreeCrew} className="btn btn-primary" style={{width:'auto',flexShrink:0,padding:'0 18px'}}><i className="ti ti-plus" aria-hidden="true"/> Add</button>
+                <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:20}}>
+                  <input ref={treeNameInput} placeholder="Full name" autoComplete="off" onChange={e=>treeNameRef.current=e.target.value} style={inputStyle}/>
+                  <input ref={treeUserInput} placeholder="Username (for login)" autoComplete="off" autoCapitalize="none" onChange={e=>treeUserRef.current=e.target.value} style={inputStyle}/>
+                  <input ref={treePassInput} placeholder="Temporary password" type="password" autoComplete="new-password" onChange={e=>treePassRef.current=e.target.value} style={inputStyle}/>
+                  <button onClick={addTreeCrew} className="btn btn-primary">Add to Tree Lot</button>
                 </div>
               </div>
             </>
@@ -733,6 +759,14 @@ export default function App() {
                 <div style={{display:'flex',flexDirection:'column',gap:4,marginBottom:26}}>
                   {twd.map(date=><WeekRow key={date} date={date} empId={c.id} tree/>)}
                 </div>
+                {!Object.values(users).some(u=>u.role==='tree'&&u.empId===c.id)&&(
+                  <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:26}}>
+                    <div className="label">Give {c.name.split(' ')[0]} a login</div>
+                    <input ref={treeUserInput} placeholder="Username (for login)" autoComplete="off" autoCapitalize="none" onChange={e=>treeUserRef.current=e.target.value} style={inputStyle}/>
+                    <input ref={treePassInput} placeholder="Temporary password" type="password" autoComplete="new-password" onChange={e=>treePassRef.current=e.target.value} style={inputStyle}/>
+                    <button onClick={()=>setTreeLogin(c.id)} className="btn btn-primary">Create Login</button>
+                  </div>
+                )}
                 <button className="btn btn-danger" data-haptic="heavy" onClick={async()=>{ if(await removeTreeCrew(c.id)) setView('trees') }} style={{marginBottom:20}}><i className="ti ti-user-minus" aria-hidden="true"/> Remove from Tree Lot</button>
               </div>
             </>
@@ -899,7 +933,7 @@ export default function App() {
                 </div>
                 <div>
                   <div style={{fontWeight:700,fontSize:15,letterSpacing:'-0.01em'}}>{currentUser?.username}</div>
-                  <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>{isAdmin?'Administrator':'Employee'}</div>
+                  <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>{isAdmin?'Administrator':isTree?'Tree Lot':'Employee'}</div>
                 </div>
               </div>
 
