@@ -51,6 +51,7 @@ const getWeekDatesForOffset = (offset=0) => {
   return [0,3,4,5,6].map(o=>{ const d=new Date(fri); d.setDate(fri.getDate()+o); return dateStr(d) })
 }
 const getWeekDates = () => getWeekDatesForOffset(0)
+const getTreeWeekDates = () => { const [fri]=getWeekDatesForOffset(0); return [0,1,2,3,4,5,6].map(o=>{ const d=new Date(fri+'T12:00:00'); d.setDate(d.getDate()+o); return dateStr(d) }) }
 
 const calcLunch = r => {
   if (!r?.lunches?.length) return 0
@@ -92,6 +93,10 @@ export default function App() {
   const [editIn,      setEditIn]      = useState('')
   const [editOut,     setEditOut]     = useState('')
   const [editLunches, setEditLunches] = useState([])
+  const [editTree,    setEditTree]    = useState(false)
+  const [treeCrew,    setTreeCrew]    = useState([])
+  const [treeRecords, setTreeRecords] = useState([])
+  const [selTreeId,   setSelTreeId]   = useState(null)
 
   const loginUserRef=useRef(''); const loginUserInput=useRef(null)
   const loginPassRef=useRef(''); const loginPassInput=useRef(null)
@@ -100,13 +105,16 @@ export default function App() {
   const newNameRef=useRef('');   const newNameInput=useRef(null)
   const newUserRef=useRef('');   const newUserInput=useRef(null)
   const newPassRef=useRef('');   const newPassInput=useRef(null)
+  const treeNameRef=useRef('');  const treeNameInput=useRef(null)
 
   const loadAll = async () => {
-    const [usrs,emps,recs,sett] = await Promise.all([fbGet('users'),fbGet('employees'),fbGet('records'),fbGet('settings')])
+    const [usrs,emps,recs,sett,tCrew,tRecs] = await Promise.all([fbGet('users'),fbGet('employees'),fbGet('records'),fbGet('settings'),fbGet('treeCrew'),fbGet('treeRecords')])
     if(usrs&&typeof usrs==='object') setUsers(usrs)
     if(Array.isArray(emps)) setEmployees(emps)
     if(Array.isArray(recs)) setRecords(recs)
     if(sett?.email!==undefined){ setSettings(sett); setSettEmail(sett.email||'') }
+    setTreeCrew(Array.isArray(tCrew)?tCrew:[])
+    setTreeRecords(Array.isArray(tRecs)?tRecs:[])
   }
 
   useEffect(()=>{
@@ -148,6 +156,22 @@ export default function App() {
   const saveRecords   = async r => { setRecords(r);   await fbSet('records',r) }
   const saveSettings  = async s => { setSettings(s);  await fbSet('settings',s) }
   const saveUsers     = async u => { setUsers(u);     await fbSet('users',u) }
+  const saveTreeCrew    = async c => { setTreeCrew(c);    await fbSet('treeCrew',c) }
+  const saveTreeRecords = async r => { setTreeRecords(r); await fbSet('treeRecords',r) }
+  const recSrc = tree => tree ? [treeRecords, saveTreeRecords] : [records, saveRecords]
+
+  const addTreeCrew = async () => {
+    const name=treeNameRef.current.trim()
+    if(!name){ showToast('Enter a name'); return }
+    await saveTreeCrew([...treeCrew,{id:Date.now(),name,color:COLORS[treeCrew.length%COLORS.length]}])
+    treeNameRef.current=''; if(treeNameInput.current) treeNameInput.current.value=''
+    haptic('success'); showToast(`${name} added to the tree lot`)
+  }
+  const removeTreeCrew = async id => {
+    if(!confirm('Remove this person from the tree lot crew? Their logged hours stay saved.')) return false
+    await saveTreeCrew(treeCrew.filter(c=>c.id!==id))
+    return true
+  }
 
   const doLogin = async () => {
     const username=loginUserRef.current.trim(), password=loginPassRef.current
@@ -200,17 +224,17 @@ export default function App() {
     setOfferBio(false); setPendingBio(null); showToast(ok?'Face ID enabled!':'Could not enable Face ID'); setView('home')
   }
 
-  const getTodayRec = empId => records.find(r=>r.empId===empId&&r.date===getToday())
-  const getStatus   = empId => { const r=getTodayRec(empId); if(!r?.clockIn) return 'out'; if(r.clockOut) return 'done'; if(onLunch(r)) return 'lunch'; return 'in' }
+  const getTodayRec = (empId, tree=false) => recSrc(tree)[0].find(r=>r.empId===empId&&r.date===getToday())
+  const getStatus   = (empId, tree=false) => { const r=getTodayRec(empId,tree); if(!r?.clockIn) return 'out'; if(r.clockOut) return 'done'; if(onLunch(r)) return 'lunch'; return 'in' }
 
-  const doClockIn    = async empId => { if(getTodayRec(empId)) return; await saveRecords([...records,{id:`${empId}-${Date.now()}`,empId,date:getToday(),clockIn:Date.now(),clockOut:null,lunches:[]}]) }
-  const doClockOut   = async empId => { await saveRecords(records.map(r=>{ if(r.empId!==empId||r.date!==getToday()) return r; const lunches=onLunch(r)?r.lunches.map((lb,i)=>i===r.lunches.length-1&&!lb.end?{...lb,end:Date.now()}:lb):(r.lunches||[]); return {...r,clockOut:Date.now(),lunches} })) }
-  const doLunchStart = async empId => { await saveRecords(records.map(r=>r.empId===empId&&r.date===getToday()?{...r,lunches:[...(r.lunches||[]),{start:Date.now(),end:null}]}:r)) }
-  const doLunchEnd   = async empId => { await saveRecords(records.map(r=>{ if(r.empId!==empId||r.date!==getToday()) return r; const lunches=(r.lunches||[]).map((lb,i)=>i===r.lunches.length-1&&!lb.end?{...lb,end:Date.now()}:lb); return {...r,lunches} })) }
+  const doClockIn    = async (empId, tree=false) => { const [recs,save]=recSrc(tree); if(getTodayRec(empId,tree)) return; await save([...recs,{id:`${empId}-${Date.now()}`,empId,date:getToday(),clockIn:Date.now(),clockOut:null,lunches:[]}]) }
+  const doClockOut   = async (empId, tree=false) => { const [recs,save]=recSrc(tree); await save(recs.map(r=>{ if(r.empId!==empId||r.date!==getToday()) return r; const lunches=onLunch(r)?r.lunches.map((lb,i)=>i===r.lunches.length-1&&!lb.end?{...lb,end:Date.now()}:lb):(r.lunches||[]); return {...r,clockOut:Date.now(),lunches} })) }
+  const doLunchStart = async (empId, tree=false) => { const [recs,save]=recSrc(tree); await save(recs.map(r=>r.empId===empId&&r.date===getToday()?{...r,lunches:[...(r.lunches||[]),{start:Date.now(),end:null}]}:r)) }
+  const doLunchEnd   = async (empId, tree=false) => { const [recs,save]=recSrc(tree); await save(recs.map(r=>{ if(r.empId!==empId||r.date!==getToday()) return r; const lunches=(r.lunches||[]).map((lb,i)=>i===r.lunches.length-1&&!lb.end?{...lb,end:Date.now()}:lb); return {...r,lunches} })) }
 
-  const openEdit = (empId, date) => {
-    const rec=records.find(r=>r.empId===empId&&r.date===date)
-    setEditEmpId(empId); setEditDate(date)
+  const openEdit = (empId, date, tree=false) => {
+    const rec=recSrc(tree)[0].find(r=>r.empId===empId&&r.date===date)
+    setEditEmpId(empId); setEditDate(date); setEditTree(tree)
     setEditIn(rec?tsToTimeStr(rec.clockIn):'')
     setEditOut(rec?tsToTimeStr(rec.clockOut):'')
     setEditLunches(rec?.lunches?.map(lb=>({start:tsToTimeStr(lb.start),end:tsToTimeStr(lb.end??null)}))||[])
@@ -221,13 +245,15 @@ export default function App() {
     const clockInTs=timeStrToTs(editIn,editDate), clockOutTs=timeStrToTs(editOut,editDate)
     if(!clockInTs){ showToast('Clock in time is required'); return }
     const lunches=editLunches.filter(lb=>lb.start).map(lb=>({start:timeStrToTs(lb.start,editDate),end:lb.end?timeStrToTs(lb.end,editDate):null}))
-    const existing=records.find(r=>r.empId===editEmpId&&r.date===editDate)
+    const [recs,save]=recSrc(editTree)
+    const existing=recs.find(r=>r.empId===editEmpId&&r.date===editDate)
     const updated=existing
-      ? records.map(r=>r.empId===editEmpId&&r.date===editDate?{...r,clockIn:clockInTs,clockOut:clockOutTs,lunches}:r)
-      : [...records,{id:`${editEmpId}-manual-${Date.now()}`,empId:editEmpId,date:editDate,clockIn:clockInTs,clockOut:clockOutTs,lunches}]
-    await saveRecords(updated); haptic('success'); showToast('Times saved!')
-    setView(isAdmin?'employee':'home')
+      ? recs.map(r=>r.empId===editEmpId&&r.date===editDate?{...r,clockIn:clockInTs,clockOut:clockOutTs,lunches}:r)
+      : [...recs,{id:`${editEmpId}-manual-${Date.now()}`,empId:editEmpId,date:editDate,clockIn:clockInTs,clockOut:clockOutTs,lunches}]
+    await save(updated); haptic('success'); showToast('Times saved!')
+    setView(editBackView())
   }
+  const editBackView = () => editTree ? 'treeMember' : isAdmin ? 'employee' : 'home'
 
   const clearMyWeek = async () => {
     if(!confirm('Clear all your time records for this week?')) return
@@ -396,18 +422,18 @@ export default function App() {
     )
   }
 
-  const NAV_ADMIN   =[{id:'home',icon:'ti-home',label:'Home'},{id:'reports',icon:'ti-chart-bar',label:'Reports'},{id:'history',icon:'ti-clock-record',label:'History'},{id:'employees',icon:'ti-users',label:'Employees'},{id:'settings',icon:'ti-settings',label:'Settings'}]
+  const NAV_ADMIN   =[{id:'home',icon:'ti-home',label:'Home'},{id:'trees',icon:'ti-christmas-tree',label:'Tree Lot'},{id:'reports',icon:'ti-chart-bar',label:'Reports'},{id:'history',icon:'ti-clock-record',label:'History'},{id:'employees',icon:'ti-users',label:'Employees'},{id:'settings',icon:'ti-settings',label:'Settings'}]
   const NAV_EMPLOYEE=[{id:'home',icon:'ti-clock',label:'My Time'},{id:'settings',icon:'ti-settings',label:'Settings'}]
   const NAV_ITEMS   =isAdmin?NAV_ADMIN:NAV_EMPLOYEE
 
-  const WeekRow = ({date, empId}) => {
-    const r=records.find(x=>x.empId===empId&&x.date===date)
+  const WeekRow = ({date, empId, tree=false}) => {
+    const r=recSrc(tree)[0].find(x=>x.empId===empId&&x.date===date)
     const dw=calcWorked(r), isToday=date===getToday()
     return (
       <div className={`week-row ${isToday?'today':dw>0?'worked':''}`} style={{display:'flex',alignItems:'center'}}>
         <span className="wday" style={{flex:1}}>{fmtDate(date)}</span>
         <span className="whrs" style={{marginRight:8}}>{dw>0?msToHM(dw):'—'}</span>
-        <button onClick={()=>openEdit(empId,date)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted-light)',fontSize:15,padding:'2px 4px',lineHeight:1}}>
+        <button onClick={()=>openEdit(empId,date,tree)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted-light)',fontSize:15,padding:'2px 4px',lineHeight:1}}>
           <i className="ti ti-pencil" aria-hidden="true"/>
         </button>
       </div>
@@ -569,13 +595,13 @@ export default function App() {
 
         {/* EDIT DAY */}
         {view==='edit'&&editDate&&(()=>{
-          const emp=employees.find(e=>e.id===editEmpId)
+          const emp=(editTree?treeCrew:employees).find(e=>e.id===editEmpId)
           const dateLabel=new Date(editDate+'T12:00:00').toLocaleDateString([],{weekday:'long',month:'long',day:'numeric'})
           return(
             <>
               <div className="page-header">
                 <div>
-                  <button className="back-btn" onClick={()=>setView(isAdmin?'employee':'home')}><i className="ti ti-arrow-left" aria-hidden="true"/> Back</button>
+                  <button className="back-btn" onClick={()=>setView(editBackView())}><i className="ti ti-arrow-left" aria-hidden="true"/> Back</button>
                   <div className="page-heading">Edit Times</div>
                 </div>
               </div>
@@ -600,7 +626,114 @@ export default function App() {
                 ))}
                 <button className="btn" onClick={()=>setEditLunches([...editLunches,{start:'',end:''}])} style={{marginBottom:26}}><i className="ti ti-plus" aria-hidden="true"/> Add Lunch Break</button>
                 <button className="btn btn-primary" onClick={saveEdit} style={{marginBottom:10}}><i className="ti ti-check" aria-hidden="true"/> Save Changes</button>
-                <button className="btn btn-danger" data-haptic="heavy" onClick={async()=>{ if(!confirm('Clear times for this day?')) return; await saveRecords(records.filter(r=>!(r.empId===editEmpId&&r.date===editDate))); showToast('Day cleared'); setView(isAdmin?'employee':'home') }}><i className="ti ti-trash" aria-hidden="true"/> Clear This Day</button>
+                <button className="btn btn-danger" data-haptic="heavy" onClick={async()=>{ if(!confirm('Clear times for this day?')) return; const [recs,save]=recSrc(editTree); await save(recs.filter(r=>!(r.empId===editEmpId&&r.date===editDate))); showToast('Day cleared'); setView(editBackView()) }}><i className="ti ti-trash" aria-hidden="true"/> Clear This Day</button>
+              </div>
+            </>
+          )
+        })()}
+
+        {/* TREE LOT - ADMIN */}
+        {view==='trees'&&isAdmin&&(()=>{
+          const twd=getTreeWeekDates()
+          const rangeLabel=`${new Date(twd[0]+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'})} – ${new Date(twd[6]+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'})}`
+          return(
+            <>
+              <div className="page-header">
+                <div><div className="app-title">TimeTrack</div><div className="page-heading">Tree Lot</div></div>
+                <div className="clock-time">{rangeLabel}</div>
+              </div>
+              <div style={{padding:'14px 18px',display:'flex',flexDirection:'column',gap:10}}>
+                {treeCrew.length===0
+                  ? <div className="empty"><i className="ti ti-christmas-tree" aria-hidden="true"/>No tree lot crew yet.<br/>Add someone below.</div>
+                  : treeCrew.map(c=>{
+                    const st=getStatus(c.id,true),rec=getTodayRec(c.id,true),w=calcWorked(rec),sc=STATUS_CONFIG[st]
+                    const wk=treeRecords.filter(r=>r.empId===c.id&&twd.includes(r.date)).reduce((s,r)=>s+calcWorked(r),0)
+                    return(
+                      <div key={c.id} className="card emp-row" onClick={()=>{setSelTreeId(c.id);setView('treeMember')}}>
+                        <div className="avatar" style={{background:c.color}}>{initials(c.name)}</div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontWeight:700,fontSize:15,letterSpacing:'-0.01em',marginBottom:4}}>{c.name}</div>
+                          <div style={{display:'flex',alignItems:'center',gap:6}}>
+                            <span className="pill" style={{background:sc.bg,color:sc.color}}>{sc.label}</span>
+                            {w>0&&<span style={{fontSize:12,color:'var(--muted)',fontVariantNumeric:'tabular-nums'}}>{msToHM(w)}</span>}
+                          </div>
+                        </div>
+                        <div style={{textAlign:'right',fontSize:11,color:'var(--muted)',lineHeight:1.8,fontVariantNumeric:'tabular-nums'}}>
+                          <div>Week</div>
+                          <div style={{fontWeight:700,color:'var(--text)'}}>{msToHM(wk)}</div>
+                        </div>
+                        <i className="ti ti-chevron-right" style={{color:'var(--muted-light)',fontSize:16}} aria-hidden="true"/>
+                      </div>
+                    )
+                  })
+                }
+                <div className="label" style={{marginTop:18}}>Add to tree lot crew</div>
+                <div style={{display:'flex',gap:10}}>
+                  <input ref={treeNameInput} placeholder="Full name" autoComplete="off" onChange={e=>treeNameRef.current=e.target.value} onKeyDown={e=>e.key==='Enter'&&addTreeCrew()} style={inputStyle}/>
+                  <button onClick={addTreeCrew} className="btn btn-primary" style={{width:'auto',flexShrink:0,padding:'0 18px'}}><i className="ti ti-plus" aria-hidden="true"/> Add</button>
+                </div>
+              </div>
+            </>
+          )
+        })()}
+
+        {/* TREE LOT MEMBER - ADMIN */}
+        {view==='treeMember'&&isAdmin&&(()=>{
+          const c=treeCrew.find(x=>x.id===selTreeId)
+          if(!c) return null
+          const twd=getTreeWeekDates()
+          const st=getStatus(c.id,true),rec=getTodayRec(c.id,true),w=calcWorked(rec),ln=calcLunch(rec),sc=STATUS_CONFIG[st]
+          const wTotal=treeRecords.filter(r=>r.empId===c.id&&twd.includes(r.date)).reduce((s,r)=>s+calcWorked(r),0)
+          return(
+            <>
+              <div className="page-header">
+                <div>
+                  <button className="back-btn" onClick={()=>setView('trees')}><i className="ti ti-arrow-left" aria-hidden="true"/> Tree Lot</button>
+                  <div className="page-heading">{c.name}</div>
+                </div>
+                <span className="pill" style={{background:sc.bg,color:sc.color}}>{sc.label}</span>
+              </div>
+              <div style={{padding:'18px 18px 0'}}>
+                <div className="metrics">
+                  <div className="metric"><div className="metric-label">Today</div><div className="metric-value">{msToHM(w)}</div></div>
+                  <div className="metric"><div className="metric-label">This week</div><div className="metric-value">{msToHM(wTotal)}</div></div>
+                </div>
+                <div className="action-area">
+                  {st==='out'   && <button className="btn btn-green" data-haptic="medium" onClick={()=>doClockIn(c.id,true)}><i className="ti ti-clock" aria-hidden="true"/> Clock In</button>}
+                  {st==='in'    && <>
+                    <button className="btn btn-amber" onClick={()=>doLunchStart(c.id,true)}><i className="ti ti-soup" aria-hidden="true"/> Start Lunch</button>
+                    <button className="btn" data-haptic="medium" onClick={()=>doClockOut(c.id,true)}><i className="ti ti-clock-off" aria-hidden="true"/> Clock Out</button>
+                  </>}
+                  {st==='lunch' && <>
+                    <button className="btn btn-amber" onClick={()=>doLunchEnd(c.id,true)}><i className="ti ti-soup" aria-hidden="true"/> End Lunch</button>
+                    <button className="btn" data-haptic="medium" onClick={()=>doClockOut(c.id,true)}><i className="ti ti-clock-off" aria-hidden="true"/> Clock Out</button>
+                  </>}
+                  {st==='done'  && (
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:10,padding:'16px 0',color:'var(--green)',fontSize:14,fontWeight:600}}>
+                      <i className="ti ti-circle-check" style={{fontSize:22}} aria-hidden="true"/>
+                      Done for today · out at {fmt(rec?.clockOut)}
+                    </div>
+                  )}
+                </div>
+                {rec&&(
+                  <div className="card" style={{marginBottom:18}}>
+                    <div className="label">Today's record</div>
+                    <div className="time-row"><span className="t-label">Clock in</span><span className="t-val">{fmt(rec.clockIn)}</span></div>
+                    {(rec.lunches||[]).map((lb,i)=>(
+                      <div key={i}>
+                        <div className="time-row"><span className="t-label">Lunch {(rec.lunches||[]).length>1?i+1:''} start</span><span className="t-val">{fmt(lb.start)}</span></div>
+                        <div className="time-row"><span className="t-label">Lunch {(rec.lunches||[]).length>1?i+1:''} end</span><span className="t-val">{lb.end?fmt(lb.end):'ongoing'}</span></div>
+                      </div>
+                    ))}
+                    <div className="time-row"><span className="t-label">Clock out</span><span className="t-val">{fmt(rec.clockOut)}</span></div>
+                    {ln>0&&<div className="time-row"><span className="t-label">Total lunch</span><span className="t-val">{msToHM(ln)}</span></div>}
+                  </div>
+                )}
+                <div className="label">This week · Fri – Thu</div>
+                <div style={{display:'flex',flexDirection:'column',gap:4,marginBottom:26}}>
+                  {twd.map(date=><WeekRow key={date} date={date} empId={c.id} tree/>)}
+                </div>
+                <button className="btn btn-danger" data-haptic="heavy" onClick={async()=>{ if(await removeTreeCrew(c.id)) setView('trees') }} style={{marginBottom:20}}><i className="ti ti-user-minus" aria-hidden="true"/> Remove from Tree Lot</button>
               </div>
             </>
           )
@@ -804,7 +937,7 @@ export default function App() {
 
       </main>
 
-      {view!=='employee'&&view!=='edit'&&(
+      {view!=='employee'&&view!=='edit'&&view!=='treeMember'&&(
         <nav className="bottom-nav" aria-label="Main navigation">
           {NAV_ITEMS.map(item=>(
             <button key={item.id} className={`nav-btn ${view===item.id?'active':''}`} onClick={()=>setView(item.id)} aria-current={view===item.id?'page':undefined}>
