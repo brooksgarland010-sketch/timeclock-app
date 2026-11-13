@@ -51,7 +51,9 @@ const getWeekDatesForOffset = (offset=0) => {
   return [0,3,4,5,6].map(o=>{ const d=new Date(fri); d.setDate(fri.getDate()+o); return dateStr(d) })
 }
 const getWeekDates = () => getWeekDatesForOffset(0)
-const getTreeWeekDates = () => { const [fri]=getWeekDatesForOffset(0); return [0,1,2,3,4,5,6].map(o=>{ const d=new Date(fri+'T12:00:00'); d.setDate(d.getDate()+o); return dateStr(d) }) }
+const getTreeWeekDatesForOffset = (offset=0) => { const [fri]=getWeekDatesForOffset(offset); return [0,1,2,3,4,5,6].map(o=>{ const d=new Date(fri+'T12:00:00'); d.setDate(d.getDate()+o); return dateStr(d) }) }
+const getTreeWeekDates = () => getTreeWeekDatesForOffset(0)
+const weekDatesFor = (offset, tree) => tree ? getTreeWeekDatesForOffset(offset) : getWeekDatesForOffset(offset)
 
 const calcLunch = r => {
   if (!r?.lunches?.length) return 0
@@ -88,6 +90,8 @@ export default function App() {
   const [pendingBio,  setPendingBio]  = useState(null)
   const [settEmail,   setSettEmail]   = useState('')
   const [historyOffset, setHistoryOffset] = useState(0)
+  const [historyTree,   setHistoryTree]   = useState(false)
+  const [editReturn,    setEditReturn]    = useState(null)
   const [editDate,    setEditDate]    = useState(null)
   const [editEmpId,   setEditEmpId]   = useState(null)
   const [editIn,      setEditIn]      = useState('')
@@ -252,9 +256,9 @@ export default function App() {
   const doLunchStart = async (empId, tree=false) => { const [recs,save]=recSrc(tree); await save(recs.map(r=>r.empId===empId&&r.date===getToday()?{...r,lunches:[...(r.lunches||[]),{start:Date.now(),end:null}]}:r)) }
   const doLunchEnd   = async (empId, tree=false) => { const [recs,save]=recSrc(tree); await save(recs.map(r=>{ if(r.empId!==empId||r.date!==getToday()) return r; const lunches=(r.lunches||[]).map((lb,i)=>i===r.lunches.length-1&&!lb.end?{...lb,end:Date.now()}:lb); return {...r,lunches} })) }
 
-  const openEdit = (empId, date, tree=false) => {
+  const openEdit = (empId, date, tree=false, returnTo=null) => {
     const rec=recSrc(tree)[0].find(r=>r.empId===empId&&r.date===date)
-    setEditEmpId(empId); setEditDate(date); setEditTree(tree)
+    setEditEmpId(empId); setEditDate(date); setEditTree(tree); setEditReturn(returnTo)
     setEditIn(rec?tsToTimeStr(rec.clockIn):'')
     setEditOut(rec?tsToTimeStr(rec.clockOut):'')
     setEditLunches(rec?.lunches?.map(lb=>({start:tsToTimeStr(lb.start),end:tsToTimeStr(lb.end??null)}))||[])
@@ -273,7 +277,7 @@ export default function App() {
     await save(updated); haptic('success'); showToast('Times saved!')
     setView(editBackView())
   }
-  const editBackView = () => editTree ? (isAdmin ? 'treeMember' : 'home') : isAdmin ? 'employee' : 'home'
+  const editBackView = () => editReturn || (editTree ? (isAdmin ? 'treeMember' : 'home') : isAdmin ? 'employee' : 'home')
 
   const clearMyWeek = async () => {
     if(!confirm('Clear all your time records for this week?')) return
@@ -302,9 +306,9 @@ export default function App() {
     const updated={...users}; Object.entries(updated).forEach(([uid,u])=>{ if(u.role==='employee'&&u.empId===id) delete updated[uid] }); await saveUsers(updated)
   }
 
-  const generatePDF = (emp, weekOffset=0) => {
-    const wd=getWeekDatesForOffset(weekOffset)
-    const recs=records.filter(r=>r.empId===emp.id&&wd.includes(r.date))
+  const generatePDF = (emp, weekOffset=0, tree=false) => {
+    const wd=weekDatesFor(weekOffset,tree), N=wd.length
+    const recs=recSrc(tree)[0].filter(r=>r.empId===emp.id&&wd.includes(r.date))
     const doc=new jsPDF({unit:'mm',format:'letter'})
     const PW=215.9,PH=279.4,M=14
     doc.setFillColor(245,238,220); doc.rect(0,0,PW,PH,'F')
@@ -313,9 +317,11 @@ export default function App() {
     doc.setTextColor(80,35,20); doc.setFontSize(12); doc.setFont(undefined,'normal'); doc.text('Name:',M+2,26)
     doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.text(emp.name,M+18,26)
     doc.setLineWidth(0.4); doc.line(M+18,27.5,M+18+doc.getTextWidth(emp.name),27.5)
-    doc.setFontSize(22); doc.setFont(undefined,'bold'); doc.text('TIME SHEET',PW-M-2,26,{align:'right'})
-    doc.setLineWidth(0.6); doc.line(PW-M-2-doc.getTextWidth('TIME SHEET'),27.8,PW-M-2,27.8)
-    const weekEndStr=new Date(wd[4]+'T12:00:00').toLocaleDateString([],{month:'long',day:'numeric',year:'numeric'})
+    const title=tree?'TREE LOT TIME SHEET':'TIME SHEET'
+    doc.setFontSize(22); doc.setFont(undefined,'bold'); doc.text(title,PW-M-2,26,{align:'right'})
+    doc.setLineWidth(0.6); doc.line(PW-M-2-doc.getTextWidth(title),27.8,PW-M-2,27.8)
+    if(tree){ doc.setFontSize(10); doc.setFont(undefined,'normal'); doc.text('Garland Bros. Tree Lot',PW-M-2,33,{align:'right'}) }
+    const weekEndStr=new Date(wd[N-1]+'T12:00:00').toLocaleDateString([],{month:'long',day:'numeric',year:'numeric'})
     doc.setFontSize(10); doc.setFont(undefined,'normal'); doc.text('Week Ending:',M+2,38)
     doc.setFont(undefined,'bold'); doc.text(weekEndStr,M+28,38)
     const TT=54,RH=12,TL=M+2,TR=PW-M-2,TW=TR-TL
@@ -326,16 +332,15 @@ export default function App() {
     doc.text('LUNCH',C.lunch+1,TT-13); doc.text('BREAK',C.lunch+1,TT-7); doc.text('TOTAL HOURS',C.total+1,TT-9)
     doc.setDrawColor(120,75,55); doc.setLineWidth(0.45)
     doc.line(TL,TT-15,TR,TT-15); doc.line(TL,TT,TR,TT)
-    for(let i=1;i<=6;i++) doc.line(TL,TT+i*RH,TR,TT+i*RH)
-    ;[C.day,C.date,C.start,C.end,C.lunch,C.total,TR].forEach(x=>doc.line(x,TT-15,x,TT+6*RH))
-    const DAY_NAMES=['Friday','Monday','Tuesday','Wednesday','Thursday']
+    for(let i=1;i<=N+1;i++) doc.line(TL,TT+i*RH,TR,TT+i*RH)
+    ;[C.day,C.date,C.start,C.end,C.lunch,C.total,TR].forEach(x=>doc.line(x,TT-15,x,TT+(N+1)*RH))
     let totalWorked=0,totalLunch=0
     wd.forEach((date,i)=>{
       const r=recs.find(x=>x.date===date),worked=calcWorked(r),lunch=calcLunch(r)
       totalWorked+=worked; totalLunch+=lunch
       const y=TT+i*RH+RH-3.5
       doc.setFont(undefined,'normal'); doc.setFontSize(10); doc.setTextColor(30,20,15)
-      doc.text(DAY_NAMES[i],C.day+1,y)
+      doc.text(new Date(date+'T12:00:00').toLocaleDateString('en-US',{weekday:'long'}),C.day+1,y)
       doc.text(new Date(date+'T12:00:00').toLocaleDateString([],{month:'numeric',day:'numeric',year:'2-digit'}),C.date+1,y)
       doc.setFontSize(9.5)
       if(r?.clockIn)  doc.text(fmt(r.clockIn),  C.start+1,y)
@@ -343,13 +348,13 @@ export default function App() {
       if(lunch>0)     doc.text(msToHM(lunch),   C.lunch+1,y)
       if(worked>0)    doc.text(msToHM(worked),  C.total+1,y)
     })
-    const totY=TT+5*RH
+    const totY=TT+N*RH
     doc.setFont(undefined,'bold'); doc.setFontSize(9); doc.setTextColor(80,35,20)
     doc.text('WEEKLY TOTALS',C.day+1,totY+RH-3.5); doc.text('--',C.date+1,totY+RH-3.5); doc.text('--',C.start+1,totY+RH-3.5); doc.text('--',C.end+1,totY+RH-3.5)
     doc.setFontSize(10); doc.setFont(undefined,'bold'); doc.setTextColor(30,20,15)
     if(totalLunch>0)  doc.text(msToHM(totalLunch), C.lunch+1,totY+RH-3.5)
     if(totalWorked>0) doc.text(msToHM(totalWorked),C.total+1,totY+RH-3.5)
-    const sigTop=TT+6*RH+14,sigH=22
+    const sigTop=TT+(N+1)*RH+14,sigH=22
     doc.setDrawColor(120,75,55); doc.setLineWidth(0.4)
     doc.rect(TL,sigTop,TW,sigH); doc.setFont(undefined,'italic'); doc.setFontSize(10); doc.setTextColor(80,35,20)
     doc.text('Employee signature:',TL+3,sigTop+7)
@@ -361,10 +366,11 @@ export default function App() {
     return doc
   }
 
-  const downloadAllPDFs = (weekOffset=0) => {
-    const wd=getWeekDatesForOffset(weekOffset)
-    const list=isAdmin?employees:employees.filter(e=>e.id===currentUser?.empId)
-    list.forEach(emp=>generatePDF(emp,weekOffset).save(`${emp.name.replace(/\s+/g,'-')}-timesheet-${wd[4]}.pdf`))
+  const pdfName = (emp, wd, tree) => `${emp.name.replace(/\s+/g,'-')}-${tree?'tree-lot-':''}timesheet-${wd[wd.length-1]}.pdf`
+  const downloadAllPDFs = (weekOffset=0, tree=false) => {
+    const wd=weekDatesFor(weekOffset,tree), crew=tree?treeCrew:employees
+    const list=isAdmin?crew:crew.filter(e=>e.id===currentUser?.empId)
+    list.forEach(emp=>generatePDF(emp,weekOffset,tree).save(pdfName(emp,wd,tree)))
     showToast(`Downloaded ${list.length} PDF${list.length!==1?'s':''}`)
   }
 
@@ -818,12 +824,19 @@ export default function App() {
 
         {/* HISTORY - ADMIN */}
         {view==='history'&&isAdmin&&(()=>{
-          const hwd=getWeekDatesForOffset(historyOffset)
-          const hRecs=records.filter(r=>hwd.includes(r.date))
-          const weekLabel=offset=>{ const d=getWeekDatesForOffset(offset); if(offset===0) return 'This week'; if(offset===1) return 'Last week'; return `${new Date(d[0]+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'})} – ${new Date(d[4]+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'})}` }
+          const T=historyTree, crew=T?treeCrew:employees
+          const hwd=weekDatesFor(historyOffset,T), hEnd=hwd[hwd.length-1]
+          const hRecs=recSrc(T)[0].filter(r=>hwd.includes(r.date))
+          const weekLabel=offset=>{ const d=weekDatesFor(offset,T); if(offset===0) return 'This week'; if(offset===1) return 'Last week'; return `${new Date(d[0]+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'})} – ${new Date(d[d.length-1]+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'})}` }
           return(
             <>
               <div className="page-header"><div><div className="app-title">TimeTrack</div><div className="page-heading">Time History</div></div></div>
+              <div style={{padding:'12px 18px 0'}}>
+                <div className={`seg${T?' seg-right':''}`} role="tablist" aria-label="Crew">
+                  <button role="tab" aria-selected={!T} className={!T?'on':''} onClick={()=>setHistoryTree(false)}>Garland Bros</button>
+                  <button role="tab" aria-selected={T} className={T?'on':''} onClick={()=>setHistoryTree(true)}>Tree Lot</button>
+                </div>
+              </div>
               <div style={{overflowX:'auto',display:'flex',gap:8,padding:'12px 18px',borderBottom:'1px solid var(--border)'}}>
                 {Array.from({length:12},(_,i)=>(
                   <button key={i} onClick={()=>setHistoryOffset(i)} className={`week-chip${historyOffset===i?' active':''}`}>
@@ -832,12 +845,12 @@ export default function App() {
                 ))}
               </div>
               <div style={{padding:'10px 18px 2px',fontSize:12,color:'var(--muted)',fontWeight:500}}>
-                Week ending {new Date(hwd[4]+'T12:00:00').toLocaleDateString([],{weekday:'long',month:'long',day:'numeric',year:'numeric'})}
+                {T?'Tree lot · ':''}Week ending {new Date(hEnd+'T12:00:00').toLocaleDateString([],{weekday:'long',month:'long',day:'numeric',year:'numeric'})}
               </div>
               <div style={{padding:'10px 18px',display:'flex',flexDirection:'column',gap:10}}>
-                {employees.length===0
-                  ? <div className="empty"><i className="ti ti-clock-record" aria-hidden="true"/>No employees yet.</div>
-                  : employees.map(emp=>{
+                {crew.length===0
+                  ? <div className="empty"><i className={`ti ${T?'ti-christmas-tree':'ti-clock-record'}`} aria-hidden="true"/>{T?'No tree lot crew yet.':'No employees yet.'}</div>
+                  : crew.map(emp=>{
                     const empRecs=hRecs.filter(r=>r.empId===emp.id)
                     const total=empRecs.reduce((s,r)=>s+calcWorked(r),0),days=empRecs.filter(r=>r.clockIn).length
                     return(
@@ -861,7 +874,7 @@ export default function App() {
                                     <span style={{flex:1,color:'var(--text)',fontVariantNumeric:'tabular-nums'}}>{fmt(r.clockIn)} – {r.clockOut?fmt(r.clockOut):'ongoing'}</span>
                                     {ln>0&&<span style={{color:'var(--muted)',marginRight:8}}>lunch {msToHM(ln)}</span>}
                                     <span style={{fontWeight:700,minWidth:52,textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{msToHM(w)}</span>
-                                    <button onClick={()=>openEdit(emp.id,date)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted-light)',fontSize:14,padding:'0 0 0 8px',lineHeight:1}}><i className="ti ti-pencil" aria-hidden="true"/></button>
+                                    <button onClick={()=>openEdit(emp.id,date,T,'history')} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted-light)',fontSize:14,padding:'0 0 0 8px',lineHeight:1}}><i className="ti ti-pencil" aria-hidden="true"/></button>
                                   </>
                                 ):<span style={{color:'var(--muted-light)',flex:1}}>No record</span>}
                               </div>
@@ -869,7 +882,7 @@ export default function App() {
                           })}
                         </div>
                         {total>0&&(
-                          <button onClick={()=>generatePDF(emp,historyOffset).save(`${emp.name.replace(/\s+/g,'-')}-timesheet-${hwd[4]}.pdf`)} className="btn" style={{marginTop:12,fontSize:12,padding:'8px 14px',width:'auto'}}>
+                          <button onClick={()=>generatePDF(emp,historyOffset,T).save(pdfName(emp,hwd,T))} className="btn" style={{marginTop:12,fontSize:12,padding:'8px 14px',width:'auto'}}>
                             <i className="ti ti-file-download" aria-hidden="true"/> Download PDF
                           </button>
                         )}
@@ -877,7 +890,7 @@ export default function App() {
                     )
                   })
                 }
-                {hRecs.length>0&&<button className="btn btn-primary" onClick={()=>downloadAllPDFs(historyOffset)}><i className="ti ti-file-download" aria-hidden="true"/> Download All PDFs for This Week</button>}
+                {hRecs.length>0&&<button className="btn btn-primary" onClick={()=>downloadAllPDFs(historyOffset,T)}><i className="ti ti-file-download" aria-hidden="true"/> {T?'Download All Tree Lot PDFs':'Download All PDFs for This Week'}</button>}
               </div>
             </>
           )

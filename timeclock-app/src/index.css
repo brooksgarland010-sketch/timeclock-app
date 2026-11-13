@@ -385,3 +385,38 @@ input  { font-family: inherit; font-size: 15px; }
 /* ── Section divider ── */
 .section { padding: 18px 18px 0; }
 .section + .section { padding-top: 14px; }
+
+/* ── Segmented switch (sliding pill) ── */
+.seg {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+.seg::before {
+  content: '';
+  position: absolute;
+  top: 3px; bottom: 3px; left: 3px;
+  width: calc(50% - 3px);
+  background: var(--card);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+.seg.seg-right::before { transform: translateX(100%); }
+.seg button {
+  position: relative;
+  z-index: 1;
+  background: none;
+  border: none;
+  padding: 9px 0;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--muted);
+  transition: color 0.15s;
+}
+.seg button.on { color: var(--text); }
+@media (prefers-reduced-motion: reduce) { .seg::before { transition: none; } }
